@@ -1,66 +1,140 @@
 #!/usr/bin/env python3
-"""Duskline 3AM Excuse — make.fun bounty u-hazel-walrus-38-4764-the-3-am-excuse-c1017878.
+"""The 3 AM Excuse — a hardware wallet that refuses to sign at 3 AM.
 
-Writes a single excuse (<=200 chars) in the voice of a hardware wallet that
-refuses to sign at 3 AM, to $MAKEFUN_OUTPUT_DIR/entry.txt.
-Deterministic, stdlib only, no network. Never writes into the repo directory:
-if the resolved output dir is the repo dir or inside it, refuse and exit 0.
-Never raises: any failure exits 0 without writing anything.
+make.fun bounty: u-hazel-walrus-38-4764-the-3-am-excuse-c1017878
+Author handle: @sesshomaru-9
+
+The program assembles one excuse line (120 characters) from three
+sentence parts, checks it against the bounty gate, and writes it to
+``$MAKEFUN_OUTPUT_DIR/entry.txt``.
+
+Behaviour guarantees:
+  * deterministic — same bytes on every run, no clock, no randomness,
+    no network, standard library only;
+  * writes only into the output directory given by the environment —
+    never into this repository;
+  * never raises — every failure path exits 0 without writing anything.
 """
 
 import os
 import sys
 import tempfile
 
-ENTRY = (
-    "My keys don't do 3 AM. Last time I signed at this hour you bought "
-    "the top, so now I pretend to be a brick until sunrise."
+# The three sentence parts of the excuse, in order. Joined with a
+# single space they form the entry exactly as submitted.
+PARTS = (
+    "My keys don't do 3 AM.",
+    "Last time I signed at this hour you bought the top,",
+    "so now I pretend to be a brick until sunrise.",
 )
 
-REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+MIN_CHARS = 1
+MAX_CHARS = 200
+OUTPUT_NAME = "entry.txt"
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _is_in_repo(path):
+def build_excuse():
+    """Join the sentence parts into the single entry line."""
+    line = " ".join(PARTS)
+    return line
+
+
+def entry_is_valid(line):
+    """Check the line against the bounty gate."""
+    if not isinstance(line, str):
+        return False
+    if not (MIN_CHARS <= len(line) <= MAX_CHARS):
+        return False
+    if not line.strip():
+        return False
+    # The entry is one line: no line breaks of any kind allowed.
+    if "\n" in line or "\r" in line:
+        return False
+    # It must be exactly the three sentences we assembled:
+    # two full stops ("AM.", "sunrise.") and one comma ("top,").
+    if line.count(".") + line.count(",") != 3:
+        return False
     try:
-        resolved = os.path.realpath(path)
+        line.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def inside_repo(path):
+    """True when *path* is this repo directory or sits inside it."""
+    try:
+        target = os.path.realpath(path)
     except Exception:
         return True
-    repo = os.path.realpath(REPO_DIR)
-    return resolved == repo or resolved.startswith(repo + os.sep)
+    root = os.path.realpath(HERE)
+    if target == root:
+        return True
+    return target.startswith(root + os.sep)
 
 
-def main():
+def pick_output_dir():
+    """Resolve the output directory from the environment.
+
+    Falls back to a fresh temporary directory when the variable is
+    unset or empty. Returns None when the directory is unusable.
+    """
+    wanted = os.environ.get("MAKEFUN_OUTPUT_DIR") or ""
+    if not wanted:
+        wanted = tempfile.mkdtemp(prefix="3am-excuse-")
+    if inside_repo(wanted):
+        return None
+    return wanted
+
+
+def write_entry(directory, line):
+    """Write *line* to entry.txt inside *directory* and verify it.
+
+    Reads the file back and compares the bytes; on any mismatch the
+    file is removed again. Returns True only on a verified write.
+    """
+    target = os.path.join(directory, OUTPUT_NAME)
+    if inside_repo(target):
+        return False
     try:
-        if not (1 <= len(ENTRY) <= 200):
-            return 0
-        if not ENTRY.strip():
-            return 0
-        ENTRY.encode("utf-8")
+        os.makedirs(directory, exist_ok=True)
+    except Exception:
+        return False
+    try:
+        with open(target, "w", encoding="utf-8", newline="") as handle:
+            handle.write(line)
+    except Exception:
+        return False
+    try:
+        with open(target, "r", encoding="utf-8") as handle:
+            written = handle.read()
+    except Exception:
+        return False
+    if written != line:
+        try:
+            os.remove(target)
+        except Exception:
+            pass
+        return False
+    return True
 
-        out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or ""
-        if not out_dir:
-            out_dir = tempfile.mkdtemp(prefix="duskline-3am-excuse-")
-        if _is_in_repo(out_dir):
-            return 0
 
-        os.makedirs(out_dir, exist_ok=True)
-        target = os.path.join(out_dir, "entry.txt")
-        if _is_in_repo(target):
+def run():
+    """Build, validate and write the excuse. Always exits cleanly."""
+    try:
+        line = build_excuse()
+        if not entry_is_valid(line):
             return 0
-        with open(target, "w", encoding="utf-8", newline="") as f:
-            f.write(ENTRY)
-        with open(target, "r", encoding="utf-8") as f:
-            back = f.read()
-        if back != ENTRY:
-            try:
-                os.remove(target)
-            except Exception:
-                pass
+        directory = pick_output_dir()
+        if directory is None:
             return 0
+        write_entry(directory, line)
     except Exception:
         return 0
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())
